@@ -30,6 +30,7 @@ def auto_rvp(
 		stabilization_smooth_only=False,
 		min_pade_input_size=8,
 		max_pade_input_size=35,
+		outlier_sigma=6.0,
 		plot=True,
 	):
 	"""
@@ -47,6 +48,11 @@ def auto_rvp(
 		of interpolation without trying to find a stable zone. Default is False.
 	:param min_pade_input_size: The minimum number of points passed in one iteration to pade. Default is 8.
 	:param max_pade_input_size: The maximum number of points passed in one iteration to pade. Default is 35.
+	:param outlier_sigma: Robust-sigma threshold for rejecting divergent Pade roots before clustering.
+		Points further than this many robust sigma (1.4826 * MAD) from the median of either the real or
+		the imaginary part are dropped, and the count is reported in output.dat with the rejected rows
+		written to rejected_outliers.csv. Set to 0 or None to restore the previous behaviour.
+		Default is 6.0.
 	:param plot: Indicator if to plot the stabilization results. Default is True.
 	"""
 
@@ -115,7 +121,7 @@ def auto_rvp(
 
 	result_df.to_csv(os.path.join(dir_name, 'clustering_input.csv'), index=False)
 
-	clustering_results = clustering(result_df)
+	clustering_results = clustering(result_df, outlier_sigma)
 	if clustering_results is None:
 		print('Failed to find a cluster')
 	else:

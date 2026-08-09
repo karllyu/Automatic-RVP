@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+
+# Packaging / build artifacts
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Local calculation inputs and RVP output directories
+sims/
+results_*/

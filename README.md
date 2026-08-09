@@ -3,6 +3,11 @@
 
 # Automatic RVP (Resonances Via Pade)
 
+> **This is a modified fork.** Forked from [haritan/Automatic-RVP](https://github.com/haritan/Automatic-RVP)
+> and modified in 2026 by Karl Lyu. Changes to `src/clustering.py`, `src/pade.py` and `src/rvp.py`
+> are described in [Modifications in this fork](#modifications-in-this-fork) below and in the commit
+> history. The original code is by Idan Haritan and Yochai Safrai; this fork remains under GPL v3.0.
+
 **Automatic RVP is a python based code designed to automatically calculate resonances energy and width using a single energy level stabilization graph as input.**
 
 The code identifies the flat region of the stabilization graph, calculates the Pade approximant for different sections in that region, and then estimates the corresponding resonance energy and width from each Pade approximant. Later, the code uses a data clustering algorithm to evaluate the mean value of the resonance energy and width based on the results collected. 
@@ -94,6 +99,26 @@ This project is based on Non-Hermitian quantum mechanics theory described in:
 
 The RVP method itself is explained in details in:
 *Landau, A., Haritan, I., Kapralova-Zdanska, P. R., & Moiseyev, N. (2016). Atomic and molecular complex resonances from real eigenvalues using standard (hermitian) electronic structure calculations. The Journal of Physical Chemistry A, 120(19), 3098-3108.*
+
+## Modifications in this fork
+
+Modified in 2026 by Karl Lyu, relative to upstream v1.0.3:
+
+1. **`src/pade.py`** — the Pade root filter now keeps roots with a negative imaginary part
+   (`imag < 0`) rather than roots with `theta > 0`, selecting physical resonances directly.
+
+2. **`src/clustering.py`** — divergent Pade roots are rejected before clustering, using a
+   median/MAD robust-sigma threshold (`1.4826 * MAD`) applied as a union over the real and
+   imaginary parts. The median and MAD are used for their 50% breakdown point: a handful of
+   divergent roots is enough to inflate the standard deviation by orders of magnitude, so a
+   scale estimator built from the outliers cannot be used to find them. `min_samples` is also
+   floored at 1 so small inputs do not degenerate.
+
+3. **`src/rvp.py`** — new `outlier_sigma` parameter (default `6.0`) plumbed through
+   `auto_rvp` and `run_clustering`. Set it to `0` or `None` to restore the upstream behaviour.
+
+The rejection count is reported in `output.dat` and the rejected rows are written to
+`rejected_outliers.csv`.
 
 ## About & License
 

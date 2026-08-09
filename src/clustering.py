@@ -9,14 +9,23 @@ from sklearn.preprocessing import StandardScaler
 
 
 class Results:
-	def __init__(self, cleaned_data_length, result: pd.DataFrame, original_data_length):
+	def __init__(self, cleaned_data_length, result: pd.DataFrame, original_data_length,
+				error_filtered_length=None, rejected_outliers=None, outlier_sigma=None):
 		self.cleaned_data_length = cleaned_data_length
 		self.result = result
 		self.original_data_length = original_data_length
+		# Provenance of the two filtering stages. Kept optional so existing callers still work.
+		self.error_filtered_length = error_filtered_length if error_filtered_length is not None else cleaned_data_length
+		self.rejected_outliers = rejected_outliers if rejected_outliers is not None else pd.DataFrame()
+		self.outlier_sigma = outlier_sigma
 
 	def save_results(self, dir_name=''):
 		with open(os.path.join(dir_name, 'output.dat'), 'w') as out_file:
 			out_file.write(f'Number of points in input: {self.original_data_length}\n')
+			out_file.write(f'Number of points after imag_err filter: {self.error_filtered_length}\n')
+			if self.outlier_sigma:
+				out_file.write(f'Number of points rejected as outliers '
+								f'({self.outlier_sigma:g} robust sigma on real and imag): {len(self.rejected_outliers)}\n')
 			out_file.write(f'Number of points after filtering: {self.cleaned_data_length}\n')
 			out_file.write('\n')
 			out_file.write(self.result.to_string(justify='center', index=False, formatters={
@@ -25,9 +34,59 @@ class Results:
 				'alpha_std': '{:,.2e}'.format, 'theta_mean': '{:,.2e}'.format, 'theta_std': '{:,.2e}'.format,
 				'epsilon': '{:,.3f}'.format, 'cluster_size_percentage': '{:,.2f}'.format}))
 
+		if self.outlier_sigma and not self.rejected_outliers.empty:
+			self.rejected_outliers.to_csv(os.path.join(dir_name, 'rejected_outliers.csv'), index=False)
 
-def clustering(data: pd.DataFrame):
+
+def mad_outlier_mask(frame: pd.DataFrame, columns, k):
+	"""Flag rows lying further than k robust sigma from the median of any given column.
+
+	Robust sigma is 1.4826 * MAD, the scipy/astropy 'normal' scale convention
+	(scipy.stats.median_abs_deviation(x, scale='normal')). The constant rescales the
+	MAD onto the standard-deviation scale, so that k reads on the familiar 'k sigma'
+	magnitude. Only the product k * 1.4826 * MAD reaches the comparison, so the
+	constant is a reparameterization rather than a distributional assumption: it can
+	be dropped without changing which rows are flagged provided k is rescaled to
+	1.4826 * k (the default k=6.0 here is k=8.8956 without it). It is kept because it
+	makes the threshold portable and recognizable, not because the data is Gaussian -
+	k is an empirical threshold, not a Gaussian tail probability.
+
+	The point of the median and the MAD is their 50% breakdown point, which the mean
+	and the std do not have - a handful of divergent Pade roots is enough to inflate
+	the std by two orders of magnitude, and a scale estimator built from the outliers
+	cannot be used to find them. The advantage is conditional on contamination being
+	present: on clean Gaussian data the mean and the std are the better estimators.
+
+	Rows are flagged by a union across columns: a Pade root that is wrong in energy
+	or wrong in width is a bad root either way. A single pass suffices because the
+	MAD is not corrupted to begin with, so there is nothing to iterate toward.
+	"""
+	mask = np.zeros(len(frame), dtype=bool)
+	for column in columns:
+		values = frame[column].to_numpy()
+		median = np.median(values)
+		robust_sigma = 1.4826 * np.median(np.abs(values - median))
+		if robust_sigma <= 0:  # degenerate: over half the rows share a value
+			continue
+		mask |= np.abs(values - median) > k * robust_sigma
+	return mask
+
+
+def clustering(data: pd.DataFrame, outlier_sigma=6.0):
 	cleaned_data = data[abs((data['imag_err'] / data['imag'])) < 0.25].drop('imag_err', axis='columns').reset_index(drop=True)
+	if len(cleaned_data) < 1:
+		return None
+
+	error_filtered_length = len(cleaned_data)
+	rejected_outliers = pd.DataFrame(columns=cleaned_data.columns)
+	if outlier_sigma:
+		outliers = mad_outlier_mask(cleaned_data, ['real', 'imag'], outlier_sigma)
+		rejected_outliers = cleaned_data[outliers].reset_index(drop=True)
+		# The index must stay positional: DBSCAN core_sample_indices_ are used with .loc below.
+		cleaned_data = cleaned_data[~outliers].reset_index(drop=True)
+		if len(cleaned_data) < 1:
+			return None
+
 	scaler = StandardScaler()
 	scaled_data = pd.DataFrame(scaler.fit_transform(cleaned_data), index=cleaned_data.index, columns=cleaned_data.columns)
 	# This is a different way to calculate std.
@@ -36,7 +95,7 @@ def clustering(data: pd.DataFrame):
 	# scaled_data = pd.DataFrame((cleaned_data - cleaned_data.mean()) / cleaned_data.std(ddof=1), index=cleaned_data.index, columns=cleaned_data.columns)
 
 	size = len(cleaned_data)
-	min_samples = min(round(size * 0.08), 100)
+	min_samples = min(max(round(size * 0.08), 1), 100)
 	result1 = result2 = result3 = pd.DataFrame()
 	g1 = g2 = g3 = np.empty(0)
 
@@ -141,22 +200,27 @@ def clustering(data: pd.DataFrame):
 	result = result[['cluster', 'grade', 'real_mean', 'real_std', 'imag_mean', 'imag_std', 'imag_coeff_of_var',
 					'alpha_mean', 'alpha_std', 'theta_mean', 'theta_std','epsilon', 'size', 'cluster_size_percentage']]
 
-	return Results(len(cleaned_data), result, len(data))
+	return Results(len(cleaned_data), result, len(data),
+				error_filtered_length=error_filtered_length,
+				rejected_outliers=rejected_outliers,
+				outlier_sigma=outlier_sigma)
 
 
-def run_clustering(input_file='clustering_input.csv'):
+def run_clustering(input_file='clustering_input.csv', outlier_sigma=6.0):
 	"""
 	A program to automatically calculate complex resonance points based on Pade approximation.
 
 	This program receives data of alpha vs. energy as produced by commercial chemistry programs
 	and returns the optimal data needed for calculating complex resonance points using the Pade approximation.
 	:param input_file: Input file to be used.
+	:param outlier_sigma: Robust-sigma threshold for rejecting divergent Pade roots before clustering.
+		Set to 0 or None to disable. Default is 6.0. See mad_outlier_mask.
 	"""
 	if not os.path.exists(input_file):
 		print('Input file not found', file=sys.stderr)
 		sys.exit()
 	data = pd.read_csv(input_file)
-	results = clustering(data)
+	results = clustering(data, outlier_sigma)
 	if results is None:
 		print('Failed to find cluster')
 	else:

@@ -78,7 +78,8 @@ def pade(A):
 	df['real_err'] = pade_error.real
 	df['imag_err'] = pade_error.imag
 
-	df = df.loc[df['theta'] > 0].reset_index()
+	# Filter the results to only include points with negative imaginary parts
+	df = df.loc[df['imag'] < 0].reset_index()
 
 	return df
 
