@@ -60,8 +60,14 @@ def mad_outlier_mask(frame: pd.DataFrame, columns, k):
 	Rows are flagged by a union across columns: a Pade root that is wrong in energy
 	or wrong in width is a bad root either way. A single pass suffices because the
 	MAD is not corrupted to begin with, so there is nothing to iterate toward.
+
+	A falsy k (0 or None) means 'no rejection' and flags nothing. Without the guard
+	the comparison would be |x - median| > 0, which is true for every row that is not
+	exactly at the median, i.e. the opposite of disabling.
 	"""
 	mask = np.zeros(len(frame), dtype=bool)
+	if not k:
+		return mask
 	for column in columns:
 		values = frame[column].to_numpy()
 		median = np.median(values)
